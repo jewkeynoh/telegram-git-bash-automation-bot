@@ -1,0 +1,55 @@
+# config.yaml
+# Main configuration file for the Telegram Git Bash Automation Bot.
+# Modify these settings to suit your environment and preferences.
+
+app:
+  bot_name: "GitBashAutomatorBot" # Name used in bot messages and logs.
+
+git_bash_automation:
+  # --- Core Git Bash Process Settings ---
+  executable_path: "C:/Program Files/Git/git-bash.exe" # !IMPORTANT: Absolute path to your git-bash.exe.
+  default_target_directory_windows: "C:/Users/micod/Documents/RUSH" # !IMPORTANT: Default working directory for Git Bash operations.
+  
+  # --- Pywinauto Interaction Settings (for GUI automation) ---
+  # These settings control how the bot interacts with the Git Bash window.
+  # Adjust these if Git Bash is slow to start or commands need more time.
+  window_launch_wait_seconds: 12 # Time (sec) to wait for Git Bash window to appear after starting the process.
+  window_connect_timeout_seconds: 30 # Max time (sec) pywinauto will try to find/connect to the Git Bash window.
+  window_element_ready_timeout_seconds: 10 # Max time (sec) pywinauto waits for a window element to be responsive.
+  command_pause_seconds: 3.0 # Pause (sec) after each command is typed into Git Bash to allow processing.
+  
+  # --- Pywinauto Backend and Selectors (Advanced) ---
+  # Only change these if you have a non-standard Git Bash setup or are debugging pywinauto.
+  pywinauto_backend: "win32" # Backend for pywinauto ("win32" or "uia"). "win32" is often more stable for console apps.
+  window_class_name: "CASCADIA_HOSTING_WINDOW_CLASS" # Window class for Git Bash (if hosted in Windows Terminal). For mintty, it's different.
+  window_title_regex: ".*MINGW64.*" # Regex to identify the Git Bash window title (e.g., ".*MINGW32.*" for 32-bit).
+
+telegram_bot:
+  # --- Telegram API and Bot Behavior ---
+  api_base_url: "https://api.telegram.org/bot" # Base URL for Telegram Bot API. Unlikely to change.
+  authorized_user_ids: # !IMPORTANT: List of Telegram User IDs authorized to use this bot. Critical for security.
+    - 7434973681   # Replace with your Telegram User ID. Get it from @userinfobot.
+    # - 987654321 # Add other authorized user IDs here.
+  
+  # --- Message Settings ---
+  max_message_length: 4096 # Telegram's official max message length.
+  # Safe buffer to subtract from max_message_length when sending formatted messages,
+  # to account for Markdown/HTML characters and other overhead.
+  formatted_message_length_buffer: 200 
+
+project_paths:
+  # Define shortcuts for frequently used project directories accessible via /setdir <key>.
+  # Keys should be simple and lowercase. Paths must be absolute Windows paths.
+  estore: "C:/Users/micod/Documents/RUSH/estore"
+  points: "C:/Users/micod/Documents/RUSH/points"
+  merchant: "C:/Users/micod/Documents/RUSH/merchant"
+  # my_other_project: "D:/Work/MyOtherProject"
+
+logging:
+  # --- Logging Configuration ---
+  log_file: "logs/telegram_automation.log" # Path for the log file. Directory created if absent.
+  log_level: "INFO" # Logging verbosity: DEBUG, INFO, WARNING, ERROR, CRITICAL. (INFO or WARNING for prod).
+  
+  # --- Log Rotation (Optional - requires code change to implement fully with handlers.RotatingFileHandler) ---
+  # log_max_bytes: 10485760  # Example: 10MB max file size before rotation.
+  # log_backup_count: 5      # Example: Number of backup log files to keep.
