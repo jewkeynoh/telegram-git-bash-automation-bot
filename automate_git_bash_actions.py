@@ -11,8 +11,9 @@ import logging
 import subprocess
 import time
 from pathlib import Path
-import requests # Only for shutdown notification if this module sends it directly
+import requests
 from typing import Optional, List
+import uuid
 
 from pywinauto.application import Application, ProcessNotFoundError
 from pywinauto.findwindows import ElementNotFoundError
@@ -21,15 +22,14 @@ from pywinauto import Desktop
 
 logger = logging.getLogger(__name__)
 
-# Global state for the persistent session.
 _persistent_git_bash_process: Optional[subprocess.Popen] = None
 _persistent_git_bash_app: Optional[Application] = None
-_persistent_git_bash_dlg = None # pywinauto.WindowSpecification
+_persistent_git_bash_dlg = None
 
 def translate_path_to_bash(windows_path: str) -> str:
     """Converts Windows paths (e.g., C:\\Users) to Bash paths (/c/Users)."""
     if not windows_path or ':' not in windows_path:
-        return windows_path # Not a typical Windows drive path
+        return windows_path
     try:
         path_obj = Path(windows_path)
         drive = path_obj.drive.replace(':', '').lower()
@@ -39,7 +39,7 @@ def translate_path_to_bash(windows_path: str) -> str:
         return bash_path
     except Exception as e:
         logger.error(f"Path translation error for '{windows_path}': {e}", exc_info=True)
-        return windows_path # Fallback
+        return windows_path
 
 def _launch_and_connect_new_bash_session(gb_cfg: dict):
     """Launches and connects to a new Git Bash session, updating global session variables."""
@@ -47,13 +47,12 @@ def _launch_and_connect_new_bash_session(gb_cfg: dict):
 
     if _persistent_git_bash_process and _persistent_git_bash_process.poll() is None:
         logger.warning(f"Terminating existing Git Bash (PID: {_persistent_git_bash_process.pid}) before new launch.")
-        close_persistent_git_bash_session(called_internally=True) # Graceful close of old session
+        close_persistent_git_bash_session(called_internally=True)
 
     _persistent_git_bash_process, _persistent_git_bash_dlg, _persistent_git_bash_app = None, None, None
 
-    exe_path = gb_cfg['executable_path'] # Pydantic ensures this exists
-    # Pywinauto specific settings from the flattened config passed to this module's functions
-    py_cfg = gb_cfg # Assumes gb_cfg contains the flattened pywinauto_settings
+    exe_path = gb_cfg['executable_path']
+    py_cfg = gb_cfg
     launch_wait = py_cfg.get('window_launch_wait_seconds', 10.0)
     connect_timeout = py_cfg.get('window_connect_timeout_seconds', 30)
     backend = py_cfg.get('pywinauto_backend', 'win32')
@@ -64,7 +63,7 @@ def _launch_and_connect_new_bash_session(gb_cfg: dict):
 
     logger.info(f"Launching Git Bash: {exe_path} (Backend: {backend})")
     try:
-        _persistent_git_bash_process = subprocess.Popen([str(exe_path)]) # Path objects need str conversion for Popen
+        _persistent_git_bash_process = subprocess.Popen([str(exe_path)])
         logger.info(f"Git Bash process started (PID: {_persistent_git_bash_process.pid}). Waiting {launch_wait}s for window.")
         time.sleep(launch_wait)
     except Exception as e:
@@ -72,7 +71,7 @@ def _launch_and_connect_new_bash_session(gb_cfg: dict):
         return None
 
     logger.info(f"Finding Git Bash window (PID:{_persistent_git_bash_process.pid}). Class:'{win_class}', TitleRE:'{win_title_re}'.")
-    try: # PID-specific search
+    try:
         def find_window_by_pid_criteria():
             window = Desktop(backend=backend).window(
                 class_name=win_class, title_re=win_title_re, process=_persistent_git_bash_process.pid,
@@ -92,7 +91,7 @@ def _launch_and_connect_new_bash_session(gb_cfg: dict):
     except Exception as e_pid_search:
         logger.error(f"Unexpected error in PID-specific search: {e_pid_search}", exc_info=True)
 
-    try: # General search (fallback)
+    try:
         logger.warning("Attempting general window search by class and title regex...")
         possible_dialogs = Desktop(backend=backend).windows(class_name=win_class, title_re=win_title_re, visible_only=True, top_level_only=True)
         if not possible_dialogs: logger.error("General search: No matching windows found.")
@@ -111,19 +110,18 @@ def _launch_and_connect_new_bash_session(gb_cfg: dict):
     except Exception as e_fallback:
         logger.error(f"Error during fallback general search: {e_fallback}", exc_info=True)
 
-    if _persistent_git_bash_process and _persistent_git_bash_process.poll() is None: # Cleanup orphaned process
+    if _persistent_git_bash_process and _persistent_git_bash_process.poll() is None:
         logger.warning(f"Failed to connect to window for launched Git Bash (PID:{_persistent_git_bash_process.pid}). Terminating.")
         _persistent_git_bash_process.terminate()
         try: _persistent_git_bash_process.wait(timeout=2)
         except subprocess.TimeoutExpired: _persistent_git_bash_process.kill()
-    _persistent_git_bash_process = None # Ensure reset
+    _persistent_git_bash_process = None
     return None
 
 def ensure_git_bash_session(gb_cfg: dict):
     """Ensures a valid Git Bash session is active, reusing or launching as needed."""
-    global _persistent_git_bash_process, _persistent_git_bash_dlg # May be modified
+    global _persistent_git_bash_process, _persistent_git_bash_dlg
     
-    # Pywinauto specific settings from the flattened config passed to this module's functions
     py_cfg = gb_cfg 
     elem_ready_timeout = py_cfg.get('window_element_ready_timeout_seconds', 10)
 
@@ -142,17 +140,15 @@ def ensure_git_bash_session(gb_cfg: dict):
 
     if not is_ok:
         logger.info("Launching new Git Bash session...")
-        new_dlg = _launch_and_connect_new_bash_session(gb_cfg) # gb_cfg contains all necessary sub-configs
+        new_dlg = _launch_and_connect_new_bash_session(gb_cfg)
         if new_dlg:
-            _persistent_git_bash_dlg = new_dlg # Update global
+            _persistent_git_bash_dlg = new_dlg
             logger.info("New Git Bash session established.")
-            # Initial CD to overall default directory for the bot's session
-            # This 'default_target_directory_windows' is the main one from config,
-            # not task-specific.
+
             session_default_dir = gb_cfg.get('default_target_directory_windows')
             cmd_pause = gb_cfg.get('command_pause_seconds', 3.0)
             if session_default_dir:
-                cd_cmd = f'cd "{translate_path_to_bash(str(session_default_dir))}"' # Path needs str()
+                cd_cmd = f'cd "{translate_path_to_bash(str(session_default_dir))}"'
                 logger.info(f"New session: Initial CD to session default: {cd_cmd}")
                 try:
                     if not _persistent_git_bash_dlg.is_active(): _persistent_git_bash_dlg.set_focus()
@@ -161,7 +157,6 @@ def ensure_git_bash_session(gb_cfg: dict):
                     time.sleep(cmd_pause)
                 except Exception as e_init_cd:
                     logger.error(f"Failed initial CD in new session ('{cd_cmd}'): {e_init_cd}. Session CWD may be unexpected.", exc_info=True)
-                    # Optionally: close_persistent_git_bash_session(called_internally=True); return None
             return _persistent_git_bash_dlg
         else:
             logger.error("Failed to launch/connect new bash session in ensure_git_bash_session.")
@@ -171,15 +166,26 @@ def ensure_git_bash_session(gb_cfg: dict):
 def execute_git_bash_commands(gb_cfg: dict, commands: List[str]) -> dict:
     """Executes commands in the persistent Git Bash session."""
     action_details = []
-    active_dlg = ensure_git_bash_session(gb_cfg) # gb_cfg has all necessary sub-configs for ensure_session
+    command_outputs = [] 
+    
+    active_dlg = ensure_git_bash_session(gb_cfg)
     if not active_dlg:
         msg = "Failed to establish Git Bash session."
         logger.error(msg)
         return {"success": False, "message": msg, "details": [msg], "error_details": "No valid Git Bash window."}
 
-    task_dir_win = gb_cfg.get('target_directory_windows') # Task-specific directory
+    task_dir_win_from_cfg = gb_cfg.get('target_directory_windows')
+    task_dir_win_str = str(task_dir_win_from_cfg) if task_dir_win_from_cfg else None
+
     cmd_pause = gb_cfg.get('command_pause_seconds', 3.0)
     
+    base_temp_dir = Path(task_dir_win_str if task_dir_win_str else Path.home() / "temp_git_bash_output")
+    base_temp_dir.mkdir(parents=True, exist_ok=True)
+    temp_output_filename = f"git_bash_out_{uuid.uuid4().hex[:8]}.txt"
+    temp_output_file_windows_path = base_temp_dir / temp_output_filename
+    temp_output_file_bash_path = translate_path_to_bash(str(temp_output_file_windows_path))
+    logger.debug(f"Using temp file for output: Windows='{temp_output_file_windows_path}', Bash='{temp_output_file_bash_path}'")
+
     try:
         logger.info(f"Interacting with Git Bash: {active_dlg.window_text()}")
         action_details.append(f"Using window: {active_dlg.window_text()}")
@@ -187,37 +193,72 @@ def execute_git_bash_commands(gb_cfg: dict, commands: List[str]) -> dict:
         if not active_dlg.is_active(): active_dlg.set_focus(); time.sleep(1.0)
         if not active_dlg.is_active(): action_details.append("WARN: Window focus issue."); logger.warning("Window focus issue after set_focus().")
 
-        if task_dir_win: # CD for this specific task
-            cd_cmd = f'cd "{translate_path_to_bash(str(task_dir_win))}"' # Path needs str()
-            logger.info(f"Task CD: {cd_cmd}")
+        if task_dir_win_str:
+            cd_cmd = f'cd "{translate_path_to_bash(task_dir_win_str)}"'
+            logger.info(f"Task CD: {cd_cmd} (Target directory was specified)")
             action_details.append(f"Task CD: {cd_cmd}")
             active_dlg.type_keys(cd_cmd + "{ENTER}", with_spaces=True, pause=0.05)
             time.sleep(cmd_pause)
-        else: action_details.append("No task-specific dir; using current Bash CWD.")
+        else:
+            action_details.append("No task-specific directory provided; commands will run in the current Bash CWD without an initial CD.")
+            logger.info("No task-specific directory provided; using current Git Bash CWD for commands.")
 
-        if not commands: action_details.append("No commands for this task.")
+        if not commands:
+            action_details.append("No commands for this task.")
         else:
             for i, cmd_str in enumerate(commands):
-                logger.info(f"Typing cmd {i+1}/{len(commands)}: {cmd_str}")
-                action_details.append(f"Typed: {cmd_str}")
-                cmd_type = cmd_str.strip() + ("{ENTER}" if "{ENTER}" not in cmd_str.upper() else "")
+                logger.info(f"Preparing cmd {i+1}/{len(commands)}: {cmd_str}")
+                action_details.append(f"Preparing: {cmd_str}")
+                
+                cmd_with_redirect = f'{cmd_str.strip()} > "{temp_output_file_bash_path}" 2>&1'
+                cmd_type = cmd_with_redirect + "{ENTER}"
+                
+                logger.info(f"Typing redirected cmd: {cmd_with_redirect}")
                 if not active_dlg.is_active(): active_dlg.set_focus(); time.sleep(0.2)
                 active_dlg.type_keys(cmd_type, with_spaces=True, pause=0.05)
                 time.sleep(cmd_pause)
-        
-        action_details.append("Finished typing commands.")
-        return {"success": True, "message": "Commands typed successfully.", "details": action_details}
+
+                output_content = ""
+                if not (_persistent_git_bash_process and _persistent_git_bash_process.poll() is None and 
+                        active_dlg and active_dlg.exists() and active_dlg.is_enabled()):
+                    logger.error(f"Git Bash session became invalid after attempting to execute: {cmd_str}")
+                    close_persistent_git_bash_session(called_internally=True) 
+                    output_content = "[Git Bash session became invalid or closed during command execution]"
+                elif temp_output_file_windows_path.exists():
+                    try:
+                        output_content = temp_output_file_windows_path.read_text(encoding='utf-8', errors='replace')
+                        logger.debug(f"Output for '{cmd_str}':\n{output_content[:500]}...")
+                    except Exception as e_read:
+                        logger.error(f"Failed to read output file '{temp_output_file_windows_path}': {e_read}")
+                        output_content = f"[Error reading output file: {e_read}]"
+                else:
+                    logger.warning(f"Output file '{temp_output_file_windows_path}' not found after command: {cmd_str}")
+                    output_content = "[Output file not found, command may not have produced output or redirected correctly]"
+                
+                command_outputs.append(f"--- Output for: {cmd_str} ---\n{output_content.strip()}")
+
+        if temp_output_file_windows_path.exists():
+            try: temp_output_file_windows_path.unlink()
+            except Exception as e_del: logger.warning(f"Could not delete temp output file '{temp_output_file_windows_path}': {e_del}")
+
+        action_details.append("Finished processing commands.")
+        return {"success": True, "message": "Commands processed.", "details": command_outputs, "action_log": action_details}
+
     except Exception as e:
         err_msg = f"Error interacting with Git Bash: {e}"
         logger.error(err_msg, exc_info=True)
         action_details.append(err_msg)
-        close_persistent_git_bash_session(called_internally=True) # Close problematic session
-        return {"success": False, "message": "Error interacting with Git Bash.", "details": action_details, "error_details": str(e)}
+        if temp_output_file_windows_path.exists(): 
+            try: temp_output_file_windows_path.unlink(missing_ok=True)
+            except Exception as e_del_err: logger.warning(f"Error deleting temp file during exception: {e_del_err}")
+        close_persistent_git_bash_session(called_internally=True)
+        return {"success": False, "message": "Error interacting with Git Bash.", "details": command_outputs, "action_log": action_details, "error_details": str(e)}
+
 
 def close_persistent_git_bash_session(
     bot_token_for_notification: Optional[str] = None,
     chat_id_for_notification: Optional[int] = None,
-    called_internally: bool = False # To prevent recursive notifications or actions
+    called_internally: bool = False
 ):
     """Closes the persistent Git Bash session and optionally notifies an admin."""
     global _persistent_git_bash_process, _persistent_git_bash_dlg, _persistent_git_bash_app
@@ -230,10 +271,10 @@ def close_persistent_git_bash_session(
         session_active_at_call = True
         logger.info(f"Active Git Bash process (PID: {proc.pid}) found. Closing.")
         if _persistent_git_bash_dlg and _persistent_git_bash_dlg.exists():
-            try: _persistent_git_bash_dlg.close(); time.sleep(0.5) # Polite close
+            try: _persistent_git_bash_dlg.close(); time.sleep(0.5)
             except Exception as e_close: logger.warning(f"Polite window close failed (PID {proc.pid}): {e_close}")
         
-        if proc.poll() is None: # Still running? Terminate.
+        if proc.poll() is None:
             logger.debug(f"Process (PID {proc.pid}) still active. Terminating.")
             proc.terminate()
             try: proc.wait(timeout=5)

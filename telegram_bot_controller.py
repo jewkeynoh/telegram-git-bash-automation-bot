@@ -19,7 +19,7 @@ import atexit
 import traceback
 import requests
 import functools
-from typing import List, Dict, Optional, Any, Callable # Added Callable
+from typing import List, Dict, Optional, Any, Callable
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.constants import ParseMode as TGParseMode
@@ -29,14 +29,12 @@ from telegram.ext import (
 )
 from pydantic import BaseModel, Field, FilePath, DirectoryPath, HttpUrl, conint, confloat, constr, field_validator
 
-# Local Imports
 try:
     from automate_git_bash_actions import execute_git_bash_commands, close_persistent_git_bash_session
 except ImportError:
     print("[CRITICAL ERROR] automate_git_bash_actions.py not found. This is a fatal error.")
     sys.exit(1)
 
-# --- Configuration Models (Pydantic) ---
 class AppConfig(BaseModel):
     bot_name: str = Field(default="GitBashAutomatorBot")
 
@@ -45,21 +43,19 @@ class PywinautoInteractionConfig(BaseModel):
     window_launch_wait_seconds: confloat(ge=1) = Field(12.0)
     window_connect_timeout_seconds: conint(ge=5) = Field(30)
     window_element_ready_timeout_seconds: conint(ge=1) = Field(10)
-    pywinauto_backend: constr(pattern=r"^(win32|uia)$") = Field("win32") # Constrained string
+    pywinauto_backend: constr(pattern=r"^(win32|uia)$") = Field("win32")
     window_class_name: str = Field("CASCADIA_HOSTING_WINDOW_CLASS")
     window_title_regex: str = Field(".*MINGW64.*")
 
 class GitBashAutomationConfig(BaseModel):
     executable_path: FilePath
-    # Change DirectoryPath to str if existence is not required at config load time
     default_target_directory_windows: Optional[DirectoryPath] = None
     command_pause_seconds: confloat(ge=0.1) = Field(3.0)
-    # Nest the pywinauto specific interaction settings
     pywinauto_settings: PywinautoInteractionConfig = Field(default_factory=PywinautoInteractionConfig)
 
 class TelegramBotConfig(BaseModel):
     api_base_url: HttpUrl = Field(default="https://api.telegram.org/bot")
-    authorized_user_ids: List[conint(gt=0)] # User IDs must be positive integers
+    authorized_user_ids: List[conint(gt=0)]
     max_message_length: conint(gt=100) = Field(4096)
     formatted_message_length_buffer: conint(ge=0) = Field(200)
 
@@ -83,7 +79,7 @@ class MainConfig(BaseModel):
     project_paths: Dict[str, DirectoryPath] = Field(default_factory=dict)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 
-CONFIG: MainConfig # Global, validated configuration object
+CONFIG: MainConfig
 
 def load_configuration(config_file_path: str = 'config.yaml') -> MainConfig:
     global CONFIG
@@ -93,26 +89,19 @@ def load_configuration(config_file_path: str = 'config.yaml') -> MainConfig:
         if not raw_config_data:
             raise ValueError("Configuration file is empty.")
         CONFIG = MainConfig(**raw_config_data)
-        # Merge pywinauto_settings from top-level git_bash_automation into its nested model
-        # This is a common pattern if config structure flattens nested models for ease of use.
-        # However, for strictness, it's better if YAML matches Pydantic structure.
-        # For now, assuming YAML structure matches Pydantic (i.e., pywinauto_settings is nested).
         return CONFIG
     except FileNotFoundError:
-        # Use f-string for consistency, print to stderr for critical errors before logging is set up
         sys.stderr.write(f"[CRITICAL ERROR] Configuration file not found: {config_file_path}\n")
         sys.exit(1)
-    except Exception as e: # Catches Pydantic's ValidationError and others
+    except Exception as e:
         sys.stderr.write(f"[CRITICAL ERROR] Failed to load or validate configuration: {e}\n")
         sys.exit(1)
 
 CONFIG = load_configuration()
 
-# --- Logging Setup ---
 log_cfg = CONFIG.logging
 log_file_path = Path(log_cfg.log_file)
 log_file_path.parent.mkdir(parents=True, exist_ok=True)
-# Consider RotatingFileHandler for production from logging.handlers if configured
 logging.basicConfig(
     level=getattr(logging, log_cfg.log_level.upper(), logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - [%(module)s:%(funcName)s:%(lineno)d] - %(message)s',
@@ -120,7 +109,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Environment Variables & Constants ---
 dotenv_path = Path(__file__).resolve().parent / ".env"
 if dotenv_path.is_file():
     logger.info(f"Loading .env file from: {dotenv_path}")
@@ -133,19 +121,15 @@ if not TELEGRAM_BOT_TOKEN:
     logger.critical("FATAL: TELEGRAM_BOT_TOKEN environment variable not found.")
     sys.exit(1)
 
-# Derived constants from config for convenience
 BOT_NAME = CONFIG.app.bot_name
 AUTHORIZED_USER_IDS = CONFIG.telegram_bot.authorized_user_ids
 PROJECT_PATHS_CONFIG = CONFIG.project_paths
-TELEGRAM_API_FULL_URL_BASE = f"{str(CONFIG.telegram_bot.api_base_url)}{TELEGRAM_BOT_TOKEN}" # Use HttpUrl's str conversion
+TELEGRAM_API_FULL_URL_BASE = f"{str(CONFIG.telegram_bot.api_base_url)}{TELEGRAM_BOT_TOKEN}"
 SAFE_MSG_MAX_LEN = CONFIG.telegram_bot.max_message_length - CONFIG.telegram_bot.formatted_message_length_buffer
 
-# In-memory user state for current working directories.
-# For production/multi-user, this should be persisted (e.g., DB, file).
 user_current_directories: Dict[int, str] = {}
 
 
-# --- Decorators ---
 def authorized_only(func: Callable) -> Callable:
     """Decorator to restrict command access to users listed in `AUTHORIZED_USER_IDS`."""
     @functools.wraps(func)
@@ -155,7 +139,6 @@ def authorized_only(func: Callable) -> Callable:
             return
 
         user_id = update.effective_user.id
-        # AUTHORIZED_USER_IDS is validated by Pydantic to not be empty.
         if user_id in AUTHORIZED_USER_IDS:
             logger.debug(f"User {user_id} AUTHORIZED for {func.__name__}.")
             return await func(update, context, *args, **kwargs)
@@ -165,12 +148,11 @@ def authorized_only(func: Callable) -> Callable:
             return
     return wrapper
 
-# --- Utility Functions ---
 def escape_markdown_v2(text: Any) -> str:
     """Escapes text for Telegram's MarkdownV2 parse mode."""
     if not isinstance(text, str):
         text = str(text)
-    escape_chars = r'_*[]()~`>#+-=|{}.!' # Period is already in here.
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 async def reply_if_possible(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, **kwargs: Any):
@@ -198,7 +180,7 @@ async def _async_send_telegram_feedback_job(context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"JobQueue: Feedback sent to user {user_id_log} (ChatID: {chat_id}).")
         except Exception as e:
             logger.error(f"JobQueue: Failed to send message to chat {chat_id} (User: {user_id_log}). ParseMode: {parse_mode}. Error: {e}", exc_info=True)
-            if parse_mode: # Try fallback if a parse mode was used
+            if parse_mode:
                 fallback_text = f"Error sending formatted feedback. Original error (brief): {str(e)[:100]}"
                 try:
                     await context.bot.send_message(chat_id=chat_id, text=fallback_text)
@@ -218,14 +200,48 @@ def _run_automation_task_in_thread(
     logger.info(f"Thread (ID:{thread_id}): Starting automation for user {user_id_log}. Cmds: {commands_list}. Dir: {git_bash_cfg.get('target_directory_windows', 'Default')}")
 
     try:
-        result_dict = target_function(git_bash_cfg, commands_list) # Call to automate_git_bash_actions
+        result_dict = target_function(git_bash_cfg, commands_list)
         logger.debug(f"Thread (ID:{thread_id}): Result from target_function: {result_dict}")
 
         feedback_parts = ["✅ Automation Task COMPLETED\\." if result_dict.get("success") else "❌ Automation Task FAILED\\."]
         feedback_parts.append(f"Target Directory: `{escape_markdown_v2(str(git_bash_cfg.get('target_directory_windows', 'Default')))}`")
         feedback_parts.append(f"Summary: {escape_markdown_v2(result_dict.get('message', 'No summary.'))}")
+        
         if result_dict.get("error_details"):
             feedback_parts.append(f"Error Info: `{escape_markdown_v2(str(result_dict.get('error_details')))}`")
+    
+        command_execution_outputs = result_dict.get("details") 
+        if command_execution_outputs:
+            feedback_parts.append("\n*Command Outputs:*")
+            for output_block_str in command_execution_outputs:
+                output_lines = str(output_block_str).split('\n', 1)
+                output_header_unescaped = ""
+                actual_cmd_output_raw = str(output_block_str).strip() 
+                
+                if len(output_lines) > 1 and "--- Output for:" in output_lines[0]:
+                    output_header_unescaped = output_lines[0].strip()
+                    actual_cmd_output_raw = output_lines[1].strip() 
+
+                if output_header_unescaped:
+                    feedback_parts.append(f"\n_{escape_markdown_v2(output_header_unescaped)}_") 
+
+                if '```' in actual_cmd_output_raw:
+                    safe_output_for_code_block = actual_cmd_output_raw.replace('```', '`` ` ``')
+                else:
+                    safe_output_for_code_block = actual_cmd_output_raw
+                
+                MAX_INDIVIDUAL_OUTPUT_LENGTH = 3500
+                if len(safe_output_for_code_block) > MAX_INDIVIDUAL_OUTPUT_LENGTH:
+                    display_output = safe_output_for_code_block[:MAX_INDIVIDUAL_OUTPUT_LENGTH]
+                    last_newline_in_display = display_output.rfind('\n')
+                    if last_newline_in_display > MAX_INDIVIDUAL_OUTPUT_LENGTH / 2:
+                        display_output = display_output[:last_newline_in_display]
+                    
+                    feedback_parts.append(f"```\n{display_output}\n```")
+                    feedback_parts.append(escape_markdown_v2("...(output for this command truncated)..."))
+                else:
+                    feedback_parts.append(f"```\n{safe_output_for_code_block}\n```")
+
         if result_dict.get("details"):
             feedback_parts.append("\nExecution Details:")
             feedback_parts.extend([f"  \\- `{escape_markdown_v2(str(d))}`" for d in result_dict.get("details", [])])
@@ -251,38 +267,32 @@ def _run_automation_task_in_thread(
             err_job_data = {"chat_id": chat_id, "text": err_text, "parse_mode": TGParseMode.MARKDOWN_V2, "user_id_for_log": user_id_log}
             context.application.job_queue.run_once(_async_send_telegram_feedback_job, 0, data=err_job_data, name=f"crit_err_{user_id_log}_{time.time()}")
 
-# --- Command Handlers ---
 @authorized_only
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /start: Greets user and shows main keyboard."""
     user = update.effective_user
     logger.info(f"/start by user {user.id} ({user.full_name or 'N/A'}).")
 
-    # --- Define the keyboard layout for 'keys' ---
-    # Dynamically create buttons for the first few project paths
     project_keys_list = list(PROJECT_PATHS_CONFIG.keys())
     keys = []
 
-    # Create rows for project keys, e.g., 3 per row
     row_size = 3
     for i in range(0, len(project_keys_list), row_size):
         keys.append([KeyboardButton(f"/setdir {k}") for k in project_keys_list[i:i + row_size]])
     
-    # Add other standard command buttons
     keys.extend([
         [KeyboardButton("/currentdir"), KeyboardButton("/cleardir")],
         [KeyboardButton("/git_checkout_staging"), KeyboardButton("/git_pull_staging")],
-        [KeyboardButton("/get_logs 20"), KeyboardButton("/help")]
+        [KeyboardButton("/get_logs 20"), KeyboardButton("/reset_bash_session")],
+        [KeyboardButton("/help")]
     ])
-    # --- End of 'keys' definition ---
 
-    reply_markup = ReplyKeyboardMarkup(keys, resize_keyboard=True, one_time_keyboard=False) # one_time_keyboard=False is usually preferred for persistent main menus
+    reply_markup = ReplyKeyboardMarkup(keys, resize_keyboard=True, one_time_keyboard=False)
 
-    # Correctly escape periods in the static parts of the string
     line_with_periods_escaped = "Use `/setdir <project_key>`, then `/exec <commands>` or predefined tasks\\. See `/help`\\."
     
     start_text = (
-        f"Hello {escape_markdown_v2(user.first_name)}\\! I'm {escape_markdown_v2(BOT_NAME)}\\.\n" # Added \\. after BOT_NAME for safety
+        f"Hello {escape_markdown_v2(user.first_name)}\\! I'm {escape_markdown_v2(BOT_NAME)}\\.\n"
         f"{line_with_periods_escaped}" 
     )
     await reply_if_possible(update, context, start_text, reply_markup=reply_markup, parse_mode=TGParseMode.MARKDOWN_V2)
@@ -291,37 +301,32 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /help: Displays available commands and usage."""
     logger.info(f"/help by user {update.effective_user.id}.")
-    
-    # Project keys are already being escaped correctly if they contain special characters,
-    # and the backticks ` around them are also Markdown.
+
     prj_keys_list = list(PROJECT_PATHS_CONFIG.keys())
     if prj_keys_list:
         prj_keys = ", ".join(f"`{escape_markdown_v2(k)}`" for k in prj_keys_list)
     else:
         prj_keys = escape_markdown_v2("None configured.")
 
-    # Construct help_text ensuring all special MarkdownV2 characters in literal strings are escaped.
-    # Pay close attention to: . ( ) - # etc.
-    # Use \\ before the special character in Python strings to send a literal \ to Telegram.
     help_text_lines = [
         "*🤖 Bot Help*",
         "\n*Directory Management:*",
-        f"`/setdir <project_key>` \\- Set active dir\\. Keys: {prj_keys}\\. Ex: `/setdir estore`", # Escaped periods and colon
-        "`/currentdir` \\- Show active dir\\.", # Escaped period
-        "`/cleardir` \\- Clear active dir\\.", # Escaped period
+        f"`/setdir <project_key>` \\- Set active dir\\. Keys: {prj_keys}\\. Ex: `/setdir estore`",
+        "`/currentdir` \\- Show active dir\\.",
+        "`/cleardir` \\- Clear active dir\\.",
         
-        "\n*Custom Execution \\(CAUTION\\):*", # Escaped ( )
-        "`/exec <cmd1>;<cmd2>...` \\- Run in active/default dir\\. Ex: `/exec pwd;ls \\-al`", # Escaped period
-        "`/runcwd <PATH> :: <cmd1>;...` \\- Run in specified Windows dir\\. Ex: `/runcwd C:/Temp :: git status`", # Escaped period
+        "\n*Custom Execution \\(CAUTION\\):*",
+        "`/exec <cmd1>;<cmd2>...` \\- Run in active/default dir\\. Ex: `/exec pwd;ls \\-al`",
+        "`/runcwd <PATH> :: <cmd1>;...` \\- Run in specified Windows dir\\. Ex: `/runcwd C:/Temp :: git status`",
         
         "\n*Predefined Git Tasks:*",
-        "`/git_checkout_staging` \\- `git checkout staging` & `git status`\\.", # Escaped period
-        "`/git_pull_staging` \\- `git pull origin staging` & `git status`\\.", # Escaped period
+        "`/git_checkout_staging` \\- `git checkout staging` & `git status`\\.",
+        "`/git_pull_staging` \\- `git pull origin staging` & `git status`\\.",
         
         "\n*Utilities:*",
-        "`/get_logs [N]` \\- Show last N log lines \\(default 20, max 200\\)\\.", # Escaped ( ) and .
-        "`/start` \\- Welcome & keyboard\\.", # Escaped period
-        "`/help` \\- This message\\." # Escaped period
+        "`/get_logs [N]` \\- Show last N log lines \\(default 20, max 200\\)\\.",
+        "`/start` \\- Welcome & keyboard\\.",
+        "`/help` \\- This message\\."
     ]
     help_text = "\n".join(help_text_lines)
     
@@ -329,9 +334,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_if_possible(update, context, help_text, parse_mode=TGParseMode.MARKDOWN_V2)
     except Exception as e:
         logger.error(f"Error sending MarkdownV2 help: {e}", exc_info=True)
-        # Basic un-escaping for plain text fallback
+
         plain_help = help_text
-        for char_to_remove in ['\\', '*', '`']: # Remove common markdown chars, including the escape backslash
+        for char_to_remove in ['\\', '*', '`']:
             plain_help = plain_help.replace(char_to_remove, '')
         
         await reply_if_possible(update, context, f"Formatted help failed. Plain text version:\n\n{plain_help}\n\nError details (brief): {str(e)[:100]}")
@@ -361,7 +366,7 @@ async def get_logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         header = f"Last {len(last_n)} log lines from `{escape_markdown_v2(log_file.name)}`:\n"
         full_msg = f"{header}<pre>{log_out}</pre>"
 
-        if len(full_msg) > SAFE_MSG_MAX_LEN: # SAFE_MSG_MAX_LEN defined from config
+        if len(full_msg) > SAFE_MSG_MAX_LEN:
             await reply_if_possible(update, context, header + "Log output too long, sending chunks:", parse_mode=TGParseMode.MARKDOWN_V2)
             chunk = ""
             for line_esc in (l.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;') for l in last_n):
@@ -389,16 +394,15 @@ async def _initiate_bash_command_execution(
 
     logger.info(f"{cmd_name.upper()}: User {user_id}. Cmds: {commands}. TargetDir: {final_dir} (Source: {dir_src}).")
     
-    # Escape literal periods
     escaped_cmd_name = escape_markdown_v2(cmd_name)
     escaped_commands_str = escape_markdown_v2(str(commands))
     escaped_final_dir_str = escape_markdown_v2(str(final_dir or 'Git Bash Default'))
 
     reply_md = (
-        f"Received `{escaped_cmd_name}`\\.\n"  # Escaped period here
-        f"Cmds: `{escaped_commands_str}`\n"    # No period needed here, or escape if added
-        f"Dir: `{escaped_final_dir_str}`\n"    # No period needed here, or escape if added
-        f"Executing\\.\\.\\."                    # Escaped "..."
+        f"Received `{escaped_cmd_name}`\\.\n"
+        f"Cmds: `{escaped_commands_str}`\n"
+        f"Dir: `{escaped_final_dir_str}`\n"
+        f"Executing\\.\\.\\."
     )
     await reply_if_possible(update, context, reply_md, parse_mode=TGParseMode.MARKDOWN_V2)
     
@@ -418,7 +422,7 @@ async def runcwd_command_handler(update: Update, context: ContextTypes.DEFAULT_T
     if len(parts) != 2: await reply_if_possible(update, context, "Invalid format. Use <PATH> :: <cmds>"); return
     win_dir, cmd_str = parts[0].strip(), parts[1].strip()
     if not win_dir: await reply_if_possible(update, context, "Path cannot be empty."); return
-    if not re.match(r"^[a-zA-Z]:[\\/]", win_dir): # Basic path validation
+    if not re.match(r"^[a-zA-Z]:[\\/]", win_dir):
          await reply_if_possible(update, context, f"Path `{escape_markdown_v2(win_dir)}` doesn't look like a valid Windows absolute path.", parse_mode=TGParseMode.MARKDOWN_V2); return
     cmds = [cmd.strip() for cmd in cmd_str.split(';') if cmd.strip()]
     if not cmds: await reply_if_possible(update, context, "No valid commands after '::'."); return
@@ -428,14 +432,11 @@ async def runcwd_command_handler(update: Update, context: ContextTypes.DEFAULT_T
 async def set_directory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global user_current_directories
     user_id = update.effective_user.id
-    
-    # Ensure PROJECT_PATHS_CONFIG.keys() are handled, and "None configured." itself is escaped if it could contain special chars
-    # Though "None configured." is safe as is, it's good practice if it were dynamic.
+
     prj_keys_list = list(PROJECT_PATHS_CONFIG.keys())
     if prj_keys_list:
         keys_disp = ", ".join(f"`{escape_markdown_v2(k)}`" for k in prj_keys_list)
     else:
-        # escape_markdown_v2 will handle the period if present.
         keys_disp = escape_markdown_v2("None configured.") 
     
     if not context.args or len(context.args) != 1:
@@ -449,15 +450,12 @@ async def set_directory_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     key_arg = context.args[0].lower()
     if key_arg in PROJECT_PATHS_CONFIG:
-        path_obj = PROJECT_PATHS_CONFIG[key_arg] # This is a DirectoryPath object from Pydantic
-        path_str = str(path_obj) # Convert to string for operations and display
+        path_obj = PROJECT_PATHS_CONFIG[key_arg]
+        path_str = str(path_obj)
 
-        user_current_directories[user_id] = path_str # Store the string representation
+        user_current_directories[user_id] = path_str
         logger.info(f"User CWD SET: User {user_id} to '{key_arg}': {path_str}. All: {user_current_directories}")
-        
-        # Correctly escape parentheses for Telegram MarkdownV2
-        # Python string `\\(` sends `\(` to Telegram.
-        # Python string `\\)` sends `\)` to Telegram.
+
         message_text = f"✅ Dir set to *{escape_markdown_v2(key_arg)}* \\(\\`{escape_markdown_v2(path_str)}\\`\\)"
         
         await reply_if_possible(
@@ -467,7 +465,6 @@ async def set_directory_command(update: Update, context: ContextTypes.DEFAULT_TY
         )
     else:
         logger.warning(f"User {user_id} invalid project key: {key_arg}")
-        # Ensure the period in "not found." is escaped.
         message_text = f"❌ Key '`{escape_markdown_v2(key_arg)}`' not found\\. Keys: {keys_disp}"
         
         await reply_if_possible(
@@ -498,6 +495,84 @@ async def clear_directory_command(update: Update, context: ContextTypes.DEFAULT_
         await reply_if_possible(update, context, f"✅ CWD (`{escape_markdown_v2(path)}`) cleared. Using default: `{escape_markdown_v2(def_dir)}`.", parse_mode=TGParseMode.MARKDOWN_V2)
     else: await reply_if_possible(update, context, "No specific CWD to clear.", parse_mode=TGParseMode.MARKDOWN_V2)
 
+
+@authorized_only
+async def reset_bash_session_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Closes the current persistent Git Bash session and allows it to be relaunched
+    on the next command that requires it.
+    """
+    user = update.effective_user
+    logger.info(f"/reset_bash_session command initiated by user {user.id} ({user.full_name or 'N/A'})")
+
+    initial_message = "Attempting to reset the Git Bash session\\.\\.\\. Please wait\\.\\"
+    await reply_if_possible(update, context, initial_message, parse_mode=TGParseMode.MARKDOWN_V2)
+
+    try:
+        def _do_close_session():
+            logger.info("Thread: Calling close_persistent_git_bash_session for reset.")
+            close_persistent_git_bash_session(called_internally=True)
+            logger.info("Thread: close_persistent_git_bash_session completed for reset.")
+
+            if update.effective_chat and context.application and context.application.job_queue:
+                reset_done_msg_literal = "Git Bash session has been signaled to close. A new session will be started on the next relevant command."
+                
+                job_data = {
+                    "chat_id": update.effective_chat.id,
+                    "text": escape_markdown_v2(reset_done_msg_literal),
+                    "parse_mode": TGParseMode.MARKDOWN_V2,
+                    "user_id_for_log": user.id
+                }
+                context.application.job_queue.run_once(_async_send_telegram_feedback_job, 0, data=job_data, name=f"reset_confirm_{user.id}")
+        
+        thread = threading.Thread(target=_do_close_session, daemon=True)
+        thread.start()
+        
+    except Exception as e:
+        logger.error(f"Error during /reset_bash_session: {e}", exc_info=True)
+        error_message_literal = f"An error occurred while trying to reset the session: {str(e)}"
+        await reply_if_possible(update, context, escape_markdown_v2(error_message_literal), parse_mode=TGParseMode.MARKDOWN_V2)
+
+
+@authorized_only
+async def exec_here_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /exechere: Executes commands in the current Git Bash CWD without an initial CD."""
+    user = update.effective_user
+    logger.info(f"/exechere command invoked by user {user.id} with args: {context.args}")
+
+    if not context.args:
+        await reply_if_possible(update, context, "Usage: `/exechere <command1>;<command2>;...`\nExecutes in the *current* Git Bash working directory.", parse_mode=TGParseMode.MARKDOWN_V2)
+        return
+
+    full_command_string = " ".join(context.args)
+    commands_to_execute = [cmd.strip() for cmd in full_command_string.split(';') if cmd.strip()]
+
+    if not commands_to_execute:
+        await reply_if_possible(update, context, "No valid commands provided for `/exechere`.", parse_mode=TGParseMode.MARKDOWN_V2)
+        return
+
+    git_bash_cfg_base = CONFIG.git_bash_automation.model_dump(exclude={'pywinauto_settings'}) 
+    git_bash_cfg_for_thread = git_bash_cfg_base.copy()
+    git_bash_cfg_for_thread.update(CONFIG.git_bash_automation.pywinauto_settings.model_dump())
+    
+    git_bash_cfg_for_thread['target_directory_windows'] = None
+
+    logger.info(f"EXECHERE_HANDLER: User {user.id}. Cmds: {commands_to_execute}. Effective target_dir will be current Git Bash CWD.")
+    
+    reply_md = (
+        f"Received `/exechere`\\.\n"
+        f"Cmds: `{escape_markdown_v2(str(commands_to_execute))}`\n"
+        f"Executing in current Git Bash working directory\\.\\.\\."
+    )
+    await reply_if_possible(update, context, reply_md, parse_mode=TGParseMode.MARKDOWN_V2)
+    
+    threading.Thread(
+        target=_run_automation_task_in_thread, 
+        args=(execute_git_bash_commands, git_bash_cfg_for_thread, commands_to_execute, update, context), 
+        daemon=True
+    ).start()
+
+
 async def run_predefined_git_task(update: Update, context: ContextTypes.DEFAULT_TYPE, cmds: List[str], task_name: str):
     await _initiate_bash_command_execution(update, context, cmds, None, f"/{task_name.lower().replace(' ', '_')}")
 
@@ -508,14 +583,13 @@ async def git_checkout_staging_command(update: Update, context: ContextTypes.DEF
 async def git_pull_staging_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await run_predefined_git_task(update, context, ["git pull origin staging", "git status"], "Pull Staging")
 
-# --- Bot Error Handling and Shutdown ---
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Global error handler for python-telegram-bot."""
     logger.error(f"Exception during update handling (Update: {update}):", exc_info=context.error)
     if isinstance(update, Update) and update.effective_chat:
         err_msg = f"🆘 Unexpected error: {type(context.error).__name__}. Admins notified."
         await reply_if_possible(update, context, escape_markdown_v2(err_msg), parse_mode=TGParseMode.MARKDOWN_V2)
-    elif context.error and AUTHORIZED_USER_IDS: # Internal error, notify first admin
+    elif context.error and AUTHORIZED_USER_IDS:
         admin_err_msg = f"🆘 Bot Alert: Internal error (not user chat related).\nError: {type(context.error).__name__} - {str(context.error)[:200]}"
         _send_sync_telegram_message(admin_err_msg, AUTHORIZED_USER_IDS[0])
 
@@ -531,7 +605,6 @@ def _send_sync_telegram_message(text: str, chat_id_override: Optional[int] = Non
         logger.error(f"SYNC_MSG: No chat_id to send to. Message: {text[:50]}...")
         return
     
-    # TELEGRAM_API_FULL_URL_BASE includes the token
     url = f"{TELEGRAM_API_FULL_URL_BASE}/sendMessage"
     payload = {'chat_id': target_chat_id, 'text': text}
     try:
@@ -552,13 +625,11 @@ def global_exception_handler(exc_type, exc_value, exc_tb):
 
 def main_bot_application():
     logger.info(f"--- Initializing Bot: {BOT_NAME} ---")
-    # Startup checks for critical configurations are implicitly handled by Pydantic during load_configuration
-    # and the TELEGRAM_BOT_TOKEN check. Pydantic raises ValidationError if authorized_user_ids is empty.
     logger.info(f"Bot Name: {BOT_NAME}, Authorized IDs: {AUTHORIZED_USER_IDS}")
     logger.info(f"Default Git Dir: {CONFIG.git_bash_automation.default_target_directory_windows or 'Session Default'}")
     logger.info(f"Project Paths: {list(PROJECT_PATHS_CONFIG.keys())}")
 
-    sys.excepthook = global_exception_handler # Set early
+    sys.excepthook = global_exception_handler
     
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).job_queue(JobQueue()).build()
     
@@ -566,19 +637,23 @@ def main_bot_application():
     atexit.register(_send_sync_telegram_message, f"🤖 Bot '{BOT_NAME}' shutting down (atexit).")
 
     handlers = [
-        CommandHandler('start', start_command), CommandHandler('help', help_command),
-        CommandHandler('exec', exec_custom_commands_handler), CommandHandler('get_logs', get_logs_command),
-        CommandHandler('runcwd', runcwd_command_handler), CommandHandler('setdir', set_directory_command),
-        CommandHandler('currentdir', show_current_directory_command), CommandHandler('cleardir', clear_directory_command),
+        CommandHandler('start', start_command), 
+        CommandHandler('help', help_command),
+        CommandHandler('exec', exec_custom_commands_handler), 
+        CommandHandler('get_logs', get_logs_command),
+        CommandHandler('runcwd', runcwd_command_handler), 
+        CommandHandler('setdir', set_directory_command),
+        CommandHandler('currentdir', show_current_directory_command), 
+        CommandHandler('cleardir', clear_directory_command),
         CommandHandler('git_checkout_staging', git_checkout_staging_command),
         CommandHandler('git_pull_staging', git_pull_staging_command),
-        # MessageHandler(filters.COMMAND | (filters.TEXT & ~filters.COMMAND), log_unmatched_messages, group=1)
+        CommandHandler('reset_bash_session', reset_bash_session_command),
+        CommandHandler('exechere', exec_here_command_handler),
     ]
-    application.add_handlers(handlers) # Adds all handlers in the list, default group 0
+    application.add_handlers(handlers)
 
-    # Add the specific MessageHandler with its group
     unmatched_handler = MessageHandler(filters.COMMAND | (filters.TEXT & ~filters.COMMAND), log_unmatched_messages)
-    application.add_handler(unmatched_handler, group=1) # Specify group when adding
+    application.add_handler(unmatched_handler, group=1)
 
     application.add_error_handler(error_handler)
 

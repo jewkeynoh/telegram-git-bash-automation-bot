@@ -48,7 +48,7 @@ project_paths:
 logging:
   # --- Logging Configuration ---
   log_file: "logs/telegram_automation.log" # Path for the log file. Directory created if absent.
-  log_level: "INFO" # Logging verbosity: DEBUG, INFO, WARNING, ERROR, CRITICAL. (INFO or WARNING for prod).
+  log_level: "WARNING" # Logging verbosity: DEBUG, INFO, WARNING, ERROR, CRITICAL. (INFO or WARNING for prod).
   
   # --- Log Rotation (Optional - requires code change to implement fully with handlers.RotatingFileHandler) ---
   # log_max_bytes: 10485760  # Example: 10MB max file size before rotation.
